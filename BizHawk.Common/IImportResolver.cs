@@ -19,18 +19,22 @@ namespace BizHawk.Common
 
 	public class DynamicLibraryImportResolver : IDisposable, IImportResolver
 	{
-		private static readonly Lazy<IEnumerable<string>> asdf = new Lazy<IEnumerable<string>>(() =>
+		private static readonly Lazy<IList<string>> SearchPaths = new Lazy<IList<string>>(() =>
 		{
 			var currDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().CodeBase).Replace("file:", "");
-			return new[] { "/usr/lib/", "/usr/lib/bizhawk/", "./", "./dll/" }.Select(dir => dir[0] == '.' ? currDir + dir.Substring(1) : dir);
+			return new[] { "/usr/lib/bizhawk/", "/usr/lib/", "/usr/lib/mupen64plus/" }
+				.Concat(new[] { $"{currDir}/", $"{currDir}/dll/" })
+				.ToList();
 		});
 
 		private IntPtr _p;
 
 		public DynamicLibraryImportResolver(string dllName)
 		{
-			static string ResolveFilePath(string orig) => orig[0] == '/' ? orig : asdf.Value.Select(dir => dir + orig).FirstOrDefault(File.Exists) ?? orig;
-			_p = OSTailoredCode.LinkedLibManager.LoadOrThrow(OSTailoredCode.IsUnixHost ? ResolveFilePath(dllName) : dllName);
+			static string ResolveFilePath(string orig) => orig[0] == '/'
+				? orig
+				: SearchPaths.Value.Select(dir => dir + orig).FirstOrDefault(File.Exists) ?? orig;
+			_p = OSTailoredCode.LinkedLibManager.LoadOrThrow(OSTailoredCode.IsUnixHost ? ResolveFilePath(dllName) : dllName); // on Windows, EmuHawk modifies its process' search path
 		}
 
 		public IntPtr? GetProcAddrOrNull(string entryPoint) => OSTailoredCode.LinkedLibManager.GetProcAddrOrNull(_p, entryPoint);
