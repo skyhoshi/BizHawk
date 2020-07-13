@@ -773,7 +773,7 @@ impl MemoryBlock {
 
 		#[cfg(feature = "no-dirty-detection")]
 		unsafe {
-			for (a, p) in self.b.page_range().iter_mut_with_mirror_addr() {
+			for (a, p) in self.page_range().iter_mut_with_mirror_addr() {
 				p.dirty = true;
 				p.maybe_snapshot(a.start);
 			}

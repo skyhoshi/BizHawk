@@ -176,8 +176,8 @@ pub extern fn wbx_destroy_host(obj: *mut WaterboxHost, ret: &mut Return<()>) {
 }
 
 /// Activate a host environment.  This swaps it into memory and makes it available for use.
-/// Pointers to inside the environment are only valid while active.  Uses a mutex internally
-/// so as to not stomp over other host environments in the same 4GiB slice.
+/// Pointers to inside the environment are only valid while active.  Callbacks into the environment can only be called
+/// while active.  Uses a mutex internally so as to not stomp over other host environments in the same 4GiB slice.
 /// Ignored if host is already active.
 #[no_mangle]
 pub extern fn wbx_activate_host(obj: &mut WaterboxHost, ret: &mut Return<()>) {
