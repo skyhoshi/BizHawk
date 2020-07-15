@@ -1,7 +1,7 @@
 use lazy_static::lazy_static;
 use crate::*;
 use memory_block::{Protection, pal};
-use host::{WaterboxHost, Environment};
+use host::{Environment};
 use syscall_defs::SyscallNumber;
 
 pub mod thunks;
@@ -62,8 +62,10 @@ pub type SyscallCallback = extern "sysv64" fn(
 /// Structure used to track information for calls into waterbox code
 /// Layout must be synced with interop.s
 pub struct Context {
-	/// 1 on main thread, 0 otherwise
-	pub is_main: usize,
+	/// thread id.  1 is main thread and has different call procedures
+	pub tid: usize,
+	/// thread pointer as set by guest libc (pthread_self, etc)
+	pub thread_area: usize,
 	/// Data structure shared between all threads that describes how to call out in this guest
 	pub context_call_info: *const ContextCallInfo,
 	/// Used internally to track the host's most recent rsp when transitioned to Waterbox code.
@@ -101,9 +103,9 @@ pub struct ContextCallInfo {
 
 impl Context {
 	/// Returns a suitably initialized context.  It's almost ready to use, but host_ptr must be set before each usage
-	pub fn new(is_main: bool, context_call_info: *const ContextCallInfo, initial_guest_rsp: usize) -> Context {
+	pub fn new(tid: usize, context_call_info: *const ContextCallInfo, initial_guest_rsp: usize) -> Context {
 		let mut res: Context = unsafe { std::mem::zeroed() };
-		res.is_main = if is_main { 1 } else { 0 };
+		res.tid = tid;
 		res.context_call_info = context_call_info;
 		res.guest_rsp = initial_guest_rsp;
 		res

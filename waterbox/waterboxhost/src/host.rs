@@ -7,7 +7,7 @@ use elf::ElfLoader;
 use cinterface::MemoryLayoutTemplate;
 use goblin::elf::Elf;
 use context::{CALLBACK_SLOTS, Context, ExternalCallback, thunks::ThunkManager, ContextCallInfo};
-use parking_lot::{RwLock, Mutex};
+use parking_lot::{RwLock, Mutex, RwLockWriteGuard};
 
 pub struct Environment {
 	fs: Mutex<FileSystem>,
@@ -19,12 +19,13 @@ pub struct Environment {
 
 pub struct WaterboxHost {
 	elf: ElfLoader,
-	active: bool,
 	sealed: bool,
 	image_file: Vec<u8>,
 	main_thread_context: Context,
 	thunks: ThunkManager,
 	env: Arc<RwLock<Environment>>,
+	/// Whenever the host is not active, hold this lock to prevent threads from entering
+	inactive_lock: Option<RwLockWriteGuard<'static, Environment>>,
 }
 impl WaterboxHost {
 	pub fn new(image_file: Vec<u8>, module_name: &str, layout_template: &MemoryLayoutTemplate) -> anyhow::Result<Box<WaterboxHost>> {
@@ -43,10 +44,9 @@ impl WaterboxHost {
 			elf,
 			// layout,
 			// memory_block,
-			active: false,
 			sealed: false,
 			image_file,
-			main_thread_context: Context::new(true, null(), layout.main_thread.end()),
+			main_thread_context: Context::new(1, null(), layout.main_thread.end()),
 			thunks,
 			env: Arc::new(RwLock::new(Environment {
 				fs: Mutex::new(fs),
@@ -58,9 +58,11 @@ impl WaterboxHost {
 					host_ptr: null(),
 					extcall_slots: [None; 64],
 				},
-			}))
+			})),
+			inactive_lock: None,
 		});
 		res.main_thread_context.context_call_info = &res.env.write().context_call_info;
+		res.deactivate(); // With no lock, we actually start as "active", but not really
 		res.activate();
 		println!("Calling _start()");
 		res.run_guest_simple(res.elf.entry_point());
@@ -70,25 +72,43 @@ impl WaterboxHost {
 	}
 
 	pub fn active(&self) -> bool {
-		self.active
-	}
-
-	pub fn activate(&mut self) {
-		if !self.active {
-			let mut env = self.env.write();
-			context::prepare_thread();
-			env.context_call_info.host_ptr = &*env as *const Environment;
-			env.memory_block.get_mut().activate();
-				self.active = true;
+		match self.inactive_lock {
+			None => false,
+			_ => true,
 		}
 	}
 
-	pub fn deactivate(&mut self) {
-		if self.active {
+	pub fn activate(&mut self) {
+		if !self.active() {
+			let mut env = std::mem::replace(&mut self.inactive_lock, None).unwrap();
+			context::prepare_thread();
+			env.context_call_info.host_ptr = &*env as *const Environment;
+			env.memory_block.get_mut().activate();
+		}
+	}
+
+	pub fn deactivate<'a>(&'a mut self) {
+		if self.active() {
 			let mut env = self.env.write();
 			env.context_call_info.host_ptr = null();
 			env.memory_block.get_mut().deactivate();
-				self.active = false;
+			self.inactive_lock = Some(unsafe { std::mem::transmute::<RwLockWriteGuard<'a, Environment>, RwLockWriteGuard<'static, Environment>>(env) });
+		}
+	}
+
+	/// run code against the environment, temporarily acquiring a write lock if needed
+	fn with_env_mut<R, F: FnOnce(&mut Environment) -> R>(&mut self, f: F) -> R {
+		match &mut self.inactive_lock {
+			Some(env) => f(&mut *env),
+			None => f(&mut *self.env.write())
+		}
+	}
+
+	/// run code against the environment, temporarily acquiring a read lock if needed
+	fn with_env<R, F: FnOnce(&Environment) -> R>(&mut self, f: F) -> R {
+		match &mut self.inactive_lock {
+			Some(env) => f(&*env),
+			None => f(&*self.env.read())
 		}
 	}
 }
@@ -96,7 +116,9 @@ impl WaterboxHost {
 impl Drop for WaterboxHost {
 	fn drop(&mut self) {
 		self.deactivate();
+		let env = std::mem::replace(&mut self.inactive_lock, None).unwrap();
 		unsafe { gdb::deregister(&self.image_file[..]) }
+		drop(env);
 	}
 }
 
@@ -105,7 +127,7 @@ impl WaterboxHost {
 		if slot >= CALLBACK_SLOTS {
 			Err(anyhow!("slot must be less than {}", CALLBACK_SLOTS))
 		} else {
-			self.env.write().context_call_info.extcall_slots[slot] = Some(callback);
+			self.with_env_mut(|e| e.context_call_info.extcall_slots[slot] = Some(callback));
 			Ok(context::get_callback_ptr(slot))
 		}
 	}
@@ -136,7 +158,7 @@ impl WaterboxHost {
 			return Err(anyhow!("Already sealed!"))
 		}
 
-		let was_active = self.active;
+		let was_active = self.active();
 		self.activate();
 
 		fn run_proc(h: &mut WaterboxHost, name: &str) {
@@ -163,10 +185,10 @@ impl WaterboxHost {
 		Ok(())
 	}
 	pub fn mount_file(&mut self, name: String, data: Vec<u8>, writable: bool) -> anyhow::Result<()> {
-		self.env.read().fs.lock().mount(name, data, writable)
+		self.with_env(|e| e.fs.lock().mount(name, data, writable))
 	}
 	pub fn unmount_file(&mut self, name: &str) -> anyhow::Result<Vec<u8>> {
-		self.env.read().fs.lock().unmount(name)
+		self.with_env(|e| e.fs.lock().unmount(name))
 	}
 	// pub fn set_missing_file_callback(&mut self, cb: Option<MissingFileCallback>) {
 	// 	self.fs.set_missing_file_callback(cb);
@@ -183,25 +205,27 @@ const SAVE_END_MAGIC: &str = "ʇsoHxoqɹǝʇɐMpǝʇɐʌᴉʇɔ∀";
 impl IStateable for WaterboxHost {
 	fn save_state(&mut self, stream: &mut dyn Write) -> anyhow::Result<()> {
 		self.check_sealed()?;
-		let mut env = self.env.write();
 		bin::write_magic(stream, SAVE_START_MAGIC)?;
-		env.fs.get_mut().save_state(stream)?;
-		bin::write(stream, env.program_break.get_mut())?;
 		self.elf.save_state(stream)?;
-		env.memory_block.get_mut().save_state(stream)?;
-		bin::write_magic(stream, SAVE_END_MAGIC)?;
-		Ok(())
+		self.with_env_mut(|e| {
+			e.fs.get_mut().save_state(stream)?;
+			bin::write(stream, e.program_break.get_mut())?;
+			e.memory_block.get_mut().save_state(stream)?;
+			bin::write_magic(stream, SAVE_END_MAGIC)?;
+			Ok(())
+		})
 	}
 	fn load_state(&mut self, stream: &mut dyn Read) -> anyhow::Result<()> {
 		self.check_sealed()?;
-		let mut env = self.env.write();
 		bin::verify_magic(stream, SAVE_START_MAGIC)?;
-		env.fs.get_mut().load_state(stream)?;
-		bin::read(stream, env.program_break.get_mut())?;
 		self.elf.load_state(stream)?;
-		env.memory_block.get_mut().load_state(stream)?;
-		bin::verify_magic(stream, SAVE_END_MAGIC)?;
-		Ok(())
+		self.with_env_mut(|e| {
+			e.fs.get_mut().load_state(stream)?;
+			bin::read(stream, e.program_break.get_mut())?;
+			e.memory_block.get_mut().load_state(stream)?;
+			bin::verify_magic(stream, SAVE_END_MAGIC)?;
+			Ok(())
+		})
 	}
 }
 
