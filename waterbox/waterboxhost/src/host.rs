@@ -15,6 +15,8 @@ pub struct Environment {
 	memory_block: Mutex<Box<MemoryBlock>>,
 	layout: WbxSysLayout,
 	context_call_info: ContextCallInfo,
+	/// See comments on MemoryBlock::mirror_displacement
+	mirror_displacement: usize,
 }
 
 pub struct WaterboxHost {
@@ -36,6 +38,7 @@ impl WaterboxHost {
 		let mut memory_block = MemoryBlock::new(layout.all());
 		let elf = ElfLoader::new(&wbx, &image_file[..], module_name, &layout, &mut memory_block)?;
 		let fs = FileSystem::new();
+		let mirror_displacement = memory_block.mirror_displacement();
 
 		unsafe { gdb::register(&image_file[..]) }
 		let mut res = Box::new(WaterboxHost {
@@ -58,6 +61,7 @@ impl WaterboxHost {
 					host_ptr: null(),
 					extcall_slots: [None; 64],
 				},
+				mirror_displacement,
 			})),
 			inactive_lock: None,
 		});

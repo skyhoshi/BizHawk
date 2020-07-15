@@ -66,6 +66,8 @@ pub struct Context {
 	pub tid: usize,
 	/// thread pointer as set by guest libc (pthread_self, etc)
 	pub thread_area: usize,
+	/// a lock that this thread is waiting on
+	pub park_addr: usize,
 	/// Data structure shared between all threads that describes how to call out in this guest
 	pub context_call_info: *const ContextCallInfo,
 	/// Used internally to track the host's most recent rsp when transitioned to Waterbox code.
