@@ -138,7 +138,9 @@ pub fn futex_unlock_pi(mirror_addr: usize) {
 		unpark_one(
 			mirror_addr,
 			|r| {
-				if !r.have_more_threads {
+				if r.unparked_threads == 0 {
+					atom.store(0, Ordering::SeqCst);
+				} else if !r.have_more_threads {
 					atom.fetch_and(!FUTEX_WAITERS, Ordering::SeqCst);
 				}
 				DEFAULT_UNPARK_TOKEN
