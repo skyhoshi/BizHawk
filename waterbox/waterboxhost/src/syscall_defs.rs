@@ -750,3 +750,7 @@ pub struct TimeSpec {
 	pub tv_sec: i64,
 	pub tv_nsec: i64,
 }
+
+pub const FUTEX_WAITERS: u32 = 0x80000000;
+pub const FUTEX_OWNER_DIED: u32 = 0x40000000;
+pub const FUTEX_TID_MASK: u32 = 0x3fffffff;
