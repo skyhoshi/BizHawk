@@ -11,7 +11,7 @@ const ORG: usize = 0x35f00000000;
 
 const CALL_GUEST_IMPL_ADDR: usize = ORG;
 const CALL_GUEST_SIMPLE_ADDR: usize = ORG + 0x40;
-const ENTER_GUEST_THREAD_ADDR: usize = ORG + 0x100;
+const ENTER_GUEST_THREAD_ADDR: usize = ORG + 0x120;
 
 pub const CALLBACK_SLOTS: usize = 64;
 /// Retrieves a function pointer suitable for sending to the guest that will cause

@@ -97,6 +97,12 @@ guest_syscall:
 		mov [r11 + Context.r13 - Context.rax], r13
 		mov [r11 + Context.r14 - Context.rax], r14
 		mov [r11 + Context.r15 - Context.rax], r15
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop rbp
+		pop rbx
 		ret
 	guest_syscall_main_thread:
 		sub rsp, 8 ; align
@@ -110,12 +116,18 @@ guest_syscall:
 		mov rsp, [r10 + Context.guest_rsp]
 		ret
 
-times 0x100-($-$$) int3
+times 0x120-($-$$) int3
 ; run some code in a guest thread
 ; rdi - address of context structure.  tid should not be 1, because this is not the main thread
 enter_guest_thread:
 	mov r10, rdi
 	mov [gs:0x18], r10
+	push rbx
+	push rbp
+	push r12
+	push r13
+	push r14
+	push r15
 	mov [r10 + Context.host_rsp], rsp
 	mov rsp, [r10 + Context.guest_rsp]
 	mov r11, r10
