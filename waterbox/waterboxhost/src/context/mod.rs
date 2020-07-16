@@ -10,14 +10,15 @@ pub mod thunks;
 const ORG: usize = 0x35f00000000;
 
 const CALL_GUEST_IMPL_ADDR: usize = ORG;
-const CALL_GUEST_SIMPLE_ADDR: usize = ORG + 64;
+const CALL_GUEST_SIMPLE_ADDR: usize = ORG + 0x40;
+const ENTER_GUEST_THREAD_ADDR: usize = ORG + 0x100;
 
 pub const CALLBACK_SLOTS: usize = 64;
 /// Retrieves a function pointer suitable for sending to the guest that will cause
 /// the host to callback to `slot` when called.  Slot must be less than CALLBACK_SLOTS
 pub fn get_callback_ptr(slot: usize) -> usize{
 	assert!(slot < CALLBACK_SLOTS);
-	ORG + 0x100 + slot * 16
+	ORG + 0x200 + slot * 16
 }
 
 fn init_interop_area() -> AddressRange {
@@ -43,13 +44,19 @@ union FuncCast<T: Copy> {
 	pub f: T,
 }
 
-/// Enter waterbox code with a function that takes 0 arguments
-/// Returns the function's return value
 const CALL_GUEST_SIMPLE: FuncCast<extern "sysv64" fn(entry_point: usize, context: &mut Context) -> usize> = FuncCast { p: CALL_GUEST_SIMPLE_ADDR };
-/// Enter waterbox code with a function that takes 0 arguments
+/// Enter waterbox code for the main thread with a function that takes 0 arguments
 /// Returns the function's return value
-pub fn call_guest_simple(entry_point: usize, context: &mut Context) -> usize{
+pub fn call_guest_simple(entry_point: usize, context: &mut Context) -> usize {
 	unsafe { (CALL_GUEST_SIMPLE.f)(entry_point, context) }
+}
+const ENTER_GUEST_THREAD: FuncCast<extern "sysv64" fn(context: &mut Context)> = FuncCast { p: ENTER_GUEST_THREAD_ADDR };
+/// Enters waterbox code for a guest thread
+/// Assumes the guest is returning from a syscall; *context.guest_rsp should be an appropriate return address,
+/// and context.rax should contain the syscall return value.
+/// Returns when the guest next wants to make a syscall, with context.rax, context.{rdi..r9} appropriately filled with arguments
+pub fn enter_guest_thread(context: &mut Context) {
+	unsafe { (ENTER_GUEST_THREAD.f)(context) }
 }
 
 /// Allowed type for callback functions that Waterbox cores can make back into the real world.
@@ -61,6 +68,7 @@ pub type SyscallCallback = extern "sysv64" fn(
 
 /// Structure used to track information for calls into waterbox code
 /// Layout must be synced with interop.s
+#[repr(C)]
 pub struct Context {
 	/// thread id.  1 is main thread and has different call procedures
 	pub tid: u32,

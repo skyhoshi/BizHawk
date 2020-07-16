@@ -1,23 +1,24 @@
 use crate::{syscall_defs::*, context::Context};
 use std::sync::atomic::{Ordering, AtomicU32};
-use std::mem::transmute;
+use std::{thread::JoinHandle, mem::transmute};
 use parking_lot_core::*;
 
-/// The return type for various syscall results
-pub enum ThreadingReturn<T> {
-	/// Other host code indicated to abandon the call.  Like EAGAIN, but should not be leaked to the guest
-	HostAbandoned,
-	/// Return to guest with this
-	Complete(T),
+pub struct GuestThread {
+	context: Context,
+	NativeThread: JoinHandle<()>,
 }
-pub type ThreadingResult<T> = Result<ThreadingReturn<T>, SyscallError>;
+
+impl GuestThread {
+	
+}
+
 
 const HOST_ABORTED: UnparkToken = UnparkToken(1);
 
 // Mirror addresses are not used because of mprotect concerns (if it's not writable, we crash, whatever),
 // but because parking_lot_core requires unique addresses to operate on
 
-pub fn futex_wait(context: &mut Context, mirror_addr: usize, compare: u32) -> ThreadingResult<()> {
+pub fn futex_wait(context: &mut Context, mirror_addr: usize, compare: u32) -> SyscallResult {
 	let ret = unsafe {
 		let atom = transmute::<_, &AtomicU32>(mirror_addr);
 		let res = park(
@@ -37,10 +38,10 @@ pub fn futex_wait(context: &mut Context, mirror_addr: usize, compare: u32) -> Th
 				Err(EAGAIN)
 			},
 			ParkResult::Unparked(tok) if tok == DEFAULT_UNPARK_TOKEN => {
-				Ok(ThreadingReturn::Complete(()))
+				Ok(())
 			},
 			ParkResult::Unparked(tok) if tok == HOST_ABORTED => {
-				Ok(ThreadingReturn::HostAbandoned)
+				Err(E_WBX_HOSTABORT)
 			},
 			_ => panic!(),
 		}
@@ -93,14 +94,14 @@ pub fn futex_requeue(mirror_addr_from: usize, mirror_addr_to: usize, wake_count:
 
 // don't handle priority inversion, or the clock information (how could we introduce a clock, anyway?)
 // always handoff ("fair") to reduce nondeterminism
-pub fn futex_lock_pi(context: &mut Context, mirror_addr: usize) -> ThreadingResult<()> {
+pub fn futex_lock_pi(context: &mut Context, mirror_addr: usize) -> SyscallResult {
 	unsafe {
 		let atom = transmute::<_, &AtomicU32>(mirror_addr);
 		let ret = loop {
 			let owner = atom.compare_exchange_weak(
 				0, context.tid, Ordering::SeqCst, Ordering::SeqCst);
 			let owner_tid = match owner {
-				Ok(_) => return Ok(ThreadingReturn::Complete(())),
+				Ok(_) => return Ok(()),
 				Err(v) => v
 			};
 			let res = park(
@@ -119,10 +120,10 @@ pub fn futex_lock_pi(context: &mut Context, mirror_addr: usize) -> ThreadingResu
 				ParkResult::Invalid => (),
 				ParkResult::Unparked(tok) if tok == DEFAULT_UNPARK_TOKEN => {
 					atom.store(atom.load(Ordering::SeqCst) & FUTEX_TID_MASK | context.tid, Ordering::SeqCst);
-					break Ok(ThreadingReturn::Complete(()))
+					break Ok(())
 				},
 				ParkResult::Unparked(tok) if tok == HOST_ABORTED => {
-					break Ok(ThreadingReturn::HostAbandoned)
+					break Err(E_WBX_HOSTABORT)
 				},
 				_ => panic!(),
 			}

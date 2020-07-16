@@ -221,6 +221,7 @@ lookup! { lookup_errno: SyscallError {
 	ENOTRECOVERABLE = 131;
 	ERFKILL = 132;
 	EHWPOISON = 133;
+	E_WBX_HOSTABORT = 2222; // not passed to the guest
 }}
 
 pub const S_IFMT: u32 = 0o0170000;

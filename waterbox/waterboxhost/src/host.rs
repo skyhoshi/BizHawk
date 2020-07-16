@@ -17,6 +17,8 @@ pub struct Environment {
 	context_call_info: ContextCallInfo,
 	/// See comments on MemoryBlock::mirror_displacement
 	mirror_displacement: usize,
+	/// Threads can copy this to get their own handle to the environment
+	cloneable_env_ref: *const Arc<RwLock<Environment>>,
 }
 
 pub struct WaterboxHost {
@@ -62,10 +64,12 @@ impl WaterboxHost {
 					extcall_slots: [None; 64],
 				},
 				mirror_displacement,
+				cloneable_env_ref: null(),
 			})),
 			inactive_lock: None,
 		});
 		res.main_thread_context.context_call_info = &res.env.write().context_call_info;
+		res.env.write().cloneable_env_ref = &res.env as *const _;
 		res.deactivate(); // With no lock, we actually start as "active", but not really
 		res.activate();
 		println!("Calling _start()");
