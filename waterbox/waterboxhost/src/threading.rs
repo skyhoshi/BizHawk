@@ -1,21 +1,65 @@
 use crate::*;
 use crate::{syscall_defs::*, context::Context, host::Environment, memory_block::Protection};
-use std::sync::atomic::{Ordering, AtomicU32};
+use std::sync::{Arc, atomic::{Ordering, AtomicU32, AtomicBool}};
 use std::{thread::JoinHandle, mem::transmute};
 use parking_lot_core::*;
+use parking_lot::RwLock;
 
-pub struct GuestThread {
-	context: Box<Context>,
-	native_thread: JoinHandle<()>,
+struct GuestThread {
+	context: Context,
+	native_thread: Option<JoinHandle<()>>,
+	quit_signal: AtomicBool,
+	environment: Arc<RwLock<Environment>>,
 }
 
 impl GuestThread {
-	
+	/// create a new thread that is ready to start executing code.
+	pub fn new(cloneable_env_ref: *const Arc<RwLock<Environment>>, context: Context) -> Box<GuestThread> {
+		unsafe {
+			let res = Box::new(GuestThread {
+				context,
+				native_thread: None,
+				quit_signal: AtomicBool::new(false),
+				environment: (*cloneable_env_ref).clone(),
+			});
+			res
+		}
+	}
+	unsafe fn start(&mut self) {
+		let builder = std::thread::Builder::new()
+			.name(format!("Waterbox thread guest TID {}", self.context.tid));
+		
+		let handle = builder.spawn_unchecked(|| {
+			while !self.quit_signal.load(Ordering::SeqCst) {
+				{
+					use std::ops::Try;
+
+					let env = self.environment.read();
+					let rax = host::syscall(
+						self.context.rdi,
+						self.context.rsi,
+						self.context.rdx,
+						self.context.rcx,
+						self.context.r8,
+						self.context.r9,
+						SyscallNumber(self.context.rax),
+						&*env
+					);
+					if rax == SyscallReturn::from_error(E_WBX_HOSTABORT) {
+						continue
+					}
+					self.context.rax = rax.0;
+					context::enter_guest_thread(&mut self.context);
+				}
+			}
+		});
+		self.native_thread = Some(handle.unwrap());
+	}
 }
 
 pub struct GuestThreadSet {
 	next_tid: u32,
-	threads: Vec<GuestThread>,
+	threads: Vec<Box<GuestThread>>,
 }
 
 impl GuestThreadSet {
@@ -26,6 +70,8 @@ impl GuestThreadSet {
 	/// Child thread does not return to the same place the parent did; instead, it will begin at enter_guest_thread,
 	/// which will `ret`, and accordingly the musl code arranges for an appropriate address to be on the stack.
 	pub fn spawn(&mut self, env: &Environment, thread_area: usize, guest_rsp: usize, parent_tid: *mut u32, child_tid: usize) -> Result<u32, SyscallError> {
+		let tid = self.next_tid;
+
 		unsafe {
 			// peek inside the pthread struct to find the full area we must mark as stack-protected
 			let pthread = std::slice::from_raw_parts(thread_area as *const usize, 13);
@@ -33,40 +79,61 @@ impl GuestThreadSet {
 			let stack_size = pthread[13];
 			let stack = AddressRange { start: stack_end - stack_size, size: stack_size };
 			env.memory_block.lock().mprotect(stack.align_expand(), Protection::RWStack)?;
+
+			*parent_tid = tid;
 		}
 
 		let tid = self.next_tid;
-		let mut context = Box::new(Context::new(self.next_tid, &env.context_call_info, guest_rsp));
+		let mut context = Context::new(self.next_tid, &env.context_call_info, guest_rsp);
 		context.thread_area = thread_area;
 		context.clear_child_tid = child_tid;
+		context.rax = NR_WBX_CLONE_IN_CHILD.0; // first syscall is to do the child part of startup (which is actually nothing)
 
-		TODO
-		unsafe {
-			*parent_tid = tid;
-		}
+		let g = GuestThread::new(env.cloneable_env_ref, context);
+		self.threads.push(g);
+
 		self.next_tid += 1;
 		Ok(tid)
 	}
 }
 
+impl IStateable for GuestThreadSet {
+	// TODO: Every syscall that returns E_WBX_HOSTABORT needs to be restartable in some way
+	// TODO: Do we need to preserve the order of parking lot queues?
+	fn save_state(&mut self, stream: &mut dyn Write) -> anyhow::Result<()> {
+		Err(anyhow!("NYI"))
+	}
+	fn load_state(&mut self, stream: &mut dyn Read) -> anyhow::Result<()> {
+		Err(anyhow!("NYI"))	
+	}
+}
 
-
+pub struct FutexWord {
+	/// The address in the guest.  Used to read and write
+	pub addr: usize,
+	/// The address in the host's mirror space.  Used so we don't have to tear down parking lot queues
+	/// on swapin / swapout (otherwise guests would "share" queues)
+	pub mirror: usize,
+}
+impl FutexWord {
+	/// atomic access in the guest space
+	pub fn atom(&self) -> &AtomicU32 {
+		unsafe { transmute(self.addr) }
+	}
+}
 
 const HOST_ABORTED: UnparkToken = UnparkToken(1);
 
-// Mirror addresses are not used because of mprotect concerns (if it's not writable, we crash, whatever),
-// but because parking_lot_core requires unique addresses to operate on
-
-pub fn futex_wait(context: &mut Context, mirror_addr: usize, compare: u32) -> SyscallResult {
+pub fn futex_wait(context: &mut Context, word: FutexWord, compare: u32) -> SyscallResult {
 	let ret = unsafe {
-		let atom = transmute::<_, &AtomicU32>(mirror_addr);
+		let atom = word.atom();
 		let res = park(
-			mirror_addr,
+			word.mirror,
 			|| {
 				atom.load(Ordering::SeqCst) == compare
 			},
 			|| {
-				context.park_addr = mirror_addr
+				context.park_addr = word.mirror
 			},
 			|_, _| {},
 			DEFAULT_PARK_TOKEN,
@@ -89,11 +156,11 @@ pub fn futex_wait(context: &mut Context, mirror_addr: usize, compare: u32) -> Sy
 	ret
 }
 
-pub fn futex_wake(mirror_addr: usize, count: u32) -> usize {
+pub fn futex_wake(word: FutexWord, count: u32) -> usize {
 	let mut i = 0;
 	unsafe {
 		let res = unpark_filter(
-			mirror_addr,
+			word.mirror,
 			|_| {
 				if i < count {
 					i += 1;
@@ -108,7 +175,7 @@ pub fn futex_wake(mirror_addr: usize, count: u32) -> usize {
 	}
 }
 
-pub fn futex_requeue(mirror_addr_from: usize, mirror_addr_to: usize, wake_count: u32, requeue_count: u32) -> Result<usize, SyscallError> {
+pub fn futex_requeue(word_from: FutexWord, word_to: FutexWord, wake_count: u32, requeue_count: u32) -> Result<usize, SyscallError> {
 	let op = match (wake_count, requeue_count) {
 		(0, 0) => return Ok(0),
 		// musl only hits this variant
@@ -122,8 +189,8 @@ pub fn futex_requeue(mirror_addr_from: usize, mirror_addr_to: usize, wake_count:
 
 	unsafe {
 		let res = unpark_requeue(
-			mirror_addr_from,
-			mirror_addr_to,
+			word_from.mirror,
+			word_to.mirror,
 			|| op,
 			|_, _| DEFAULT_UNPARK_TOKEN
 		);
@@ -133,9 +200,9 @@ pub fn futex_requeue(mirror_addr_from: usize, mirror_addr_to: usize, wake_count:
 
 // don't handle priority inversion, or the clock information (how could we introduce a clock, anyway?)
 // always handoff ("fair") to reduce nondeterminism
-pub fn futex_lock_pi(context: &mut Context, mirror_addr: usize) -> SyscallResult {
+pub fn futex_lock_pi(context: &mut Context, word: FutexWord) -> SyscallResult {
 	unsafe {
-		let atom = transmute::<_, &AtomicU32>(mirror_addr);
+		let atom = word.atom();
 		let ret = loop {
 			let owner = atom.compare_exchange_weak(
 				0, context.tid, Ordering::SeqCst, Ordering::SeqCst);
@@ -144,13 +211,13 @@ pub fn futex_lock_pi(context: &mut Context, mirror_addr: usize) -> SyscallResult
 				Err(v) => v
 			};
 			let res = park(
-				mirror_addr,
+				word.mirror,
 				|| {
 					atom.compare_exchange_weak(
 						owner_tid, owner_tid | FUTEX_WAITERS, Ordering::SeqCst, Ordering::SeqCst
 					).is_ok()
 				},
-				|| context.park_addr = mirror_addr,
+				|| context.park_addr = word.mirror,
 				|_, _| {},
 				DEFAULT_PARK_TOKEN,
 				None
@@ -172,11 +239,11 @@ pub fn futex_lock_pi(context: &mut Context, mirror_addr: usize) -> SyscallResult
 	}
 }
 
-pub fn futex_unlock_pi(mirror_addr: usize) {
+pub fn futex_unlock_pi(word: FutexWord) {
 	unsafe {
-		let atom = transmute::<_, &AtomicU32>(mirror_addr);
+		let atom = word.atom();
 		unpark_one(
-			mirror_addr,
+			word.mirror,
 			|r| {
 				if r.unparked_threads == 0 {
 					atom.store(0, Ordering::SeqCst);

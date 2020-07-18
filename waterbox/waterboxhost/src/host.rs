@@ -20,6 +20,8 @@ pub struct Environment {
 	/// Threads can copy this to get their own handle to the environment
 	pub cloneable_env_ref: *const Arc<RwLock<Environment>>,
 }
+unsafe impl Sync for Environment {}
+unsafe impl Send for Environment {}
 
 pub struct WaterboxHost {
 	elf: ElfLoader,
@@ -282,7 +284,7 @@ fn arg_to_statbuff<'a>(arg: usize) -> &'a mut KStat {
 	unsafe { &mut *(arg as *mut KStat) }
 }
 
-extern "sysv64" fn syscall(
+pub extern "sysv64" fn syscall(
 	a1: usize, a2: usize, a3: usize, a4: usize, _a5: usize, _a6: usize,
 	nr: SyscallNumber, h: &Environment
 ) -> SyscallReturn {

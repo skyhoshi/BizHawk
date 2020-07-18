@@ -52,7 +52,7 @@ pub fn call_guest_simple(entry_point: usize, context: &mut Context) -> usize {
 	unsafe { (CALL_GUEST_SIMPLE.f)(entry_point, context) }
 }
 const ENTER_GUEST_THREAD: FuncCast<extern "sysv64" fn(context: &mut Context)> = FuncCast { p: ENTER_GUEST_THREAD_ADDR };
-/// Enters waterbox code for a guest thread
+/// Enters waterbox code for a guest thread.
 /// Assumes the guest is returning from a syscall; *context.guest_rsp should be an appropriate return address,
 /// and context.rax should contain the syscall return value.
 /// Returns when the guest next wants to make a syscall, with context.rax, context.{rdi..r9} appropriately filled with arguments
@@ -103,9 +103,12 @@ pub struct Context {
 	pub r14: usize,
 	pub r15: usize,	
 }
+unsafe impl Sync for Context {}
+unsafe impl Send for Context {}
+
 #[repr(C)]
 pub struct ContextCallInfo {
-	/// syscall service function
+	/// syscall service function (but only on the main thread, should we rework this??)
 	pub dispatch_syscall: SyscallCallback,
 	/// This will be passed as the final parameter to dispatch_syscall (but only on the main thread!), and is not otherwise used
 	/// by the context code.  TODO:  Revist how main thread handoff works?
@@ -150,4 +153,13 @@ pub fn prepare_thread() {
 			});
 		}
 	}
+}
+
+/// Retrieve the currently active context.
+/// Unsafe:  Pointer only valid when this thread is inside call_guest_simple, enter_guest_thread, or in
+/// a call initiated by get_thunk_for_proc.  (So, generally only during syscall callbacks)
+pub unsafe fn current_context() -> *mut Context {
+	let mut ret: *mut Context;
+	asm!("mov {} gs:0x18", out(reg) ret);
+	ret
 }

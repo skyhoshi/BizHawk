@@ -36,6 +36,7 @@ pub fn syscall_ok(result: usize) -> SyscallReturn {
 }
 
 #[repr(transparent)]
+#[derive(PartialEq, Eq)]
 pub struct SyscallReturn(pub usize);
 impl SyscallReturn {
 	pub const ERROR_THRESH: usize = -4096 as isize as usize;
@@ -221,7 +222,7 @@ lookup! { lookup_errno: SyscallError {
 	ENOTRECOVERABLE = 131;
 	ERFKILL = 132;
 	EHWPOISON = 133;
-	E_WBX_HOSTABORT = 2222; // not passed to the guest
+	E_WBX_HOSTABORT = 2222; // not passed to the guest.  Any syscall that returns this MUST be restartable later!
 }}
 
 pub const S_IFMT: u32 = 0o0170000;
@@ -655,6 +656,7 @@ lookup! { lookup_syscall: SyscallNumber {
 	NR_PIDFD_OPEN = 434;
 	NR_CLONE3 = 435;
 	NR_WBX_CLONE = 2000;
+	NR_WBX_CLONE_IN_CHILD = 2001;
 }}
 
 pub const MAP_FAILED: usize = 0xffffffffffffffff;
