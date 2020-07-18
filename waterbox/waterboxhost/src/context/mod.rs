@@ -26,7 +26,8 @@ fn init_interop_area() -> AddressRange {
 		let bytes = include_bytes!("interop.bin");
 		let addr = pal::map_anon(
 			AddressRange { start: ORG, size: bytes.len() }.align_expand(),
-			Protection::RW).unwrap();
+			Protection::RW
+		).unwrap();
 		addr.slice_mut()[0..bytes.len()].copy_from_slice(bytes);
 		pal::protect(addr, Protection::RX).unwrap();
 		addr
@@ -74,6 +75,8 @@ pub struct Context {
 	pub tid: u32,
 	/// thread pointer as set by guest libc (pthread_self, etc)
 	pub thread_area: usize,
+	/// used by set_tid_address
+	pub clear_child_tid: usize,
 	/// a lock that this thread is waiting on
 	pub park_addr: usize,
 	/// Data structure shared between all threads that describes how to call out in this guest
@@ -112,7 +115,7 @@ pub struct ContextCallInfo {
 }
 
 impl Context {
-	/// Returns a suitably initialized context.  It's almost ready to use, but host_ptr must be set before each usage
+	/// Returns a suitably initialized context
 	pub fn new(tid: u32, context_call_info: *const ContextCallInfo, initial_guest_rsp: usize) -> Context {
 		let mut res: Context = unsafe { std::mem::zeroed() };
 		res.tid = tid;

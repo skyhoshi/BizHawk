@@ -6,6 +6,8 @@ struc Context
 	.__padding resd 1
 	; thread pointer as set by guest libc (pthread_self, etc)
 	.thread_area resq 1
+	; used by set_tid_address
+	.clear_child_tid resq 1
 	; a lock that this thread is waiting on
 	.park_addr resq 1
 	; Data structure shared between all threads that describes how to call out in this guest

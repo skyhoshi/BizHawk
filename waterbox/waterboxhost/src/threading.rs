@@ -1,16 +1,55 @@
-use crate::{syscall_defs::*, context::Context};
+use crate::*;
+use crate::{syscall_defs::*, context::Context, host::Environment, memory_block::Protection};
 use std::sync::atomic::{Ordering, AtomicU32};
 use std::{thread::JoinHandle, mem::transmute};
 use parking_lot_core::*;
 
 pub struct GuestThread {
-	context: Context,
-	NativeThread: JoinHandle<()>,
+	context: Box<Context>,
+	native_thread: JoinHandle<()>,
 }
 
 impl GuestThread {
 	
 }
+
+pub struct GuestThreadSet {
+	next_tid: u32,
+	threads: Vec<GuestThread>,
+}
+
+impl GuestThreadSet {
+	/// Similar to a limited subset of clone(2).
+	/// flags are hardcoded to CLONE_VM | CLONE_FS
+	/// | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD | CLONE_SYSVSEM
+	/// | CLONE_SETTLS | CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED.
+	/// Child thread does not return to the same place the parent did; instead, it will begin at enter_guest_thread,
+	/// which will `ret`, and accordingly the musl code arranges for an appropriate address to be on the stack.
+	pub fn spawn(&mut self, env: &Environment, thread_area: usize, guest_rsp: usize, parent_tid: *mut u32, child_tid: usize) -> Result<u32, SyscallError> {
+		unsafe {
+			// peek inside the pthread struct to find the full area we must mark as stack-protected
+			let pthread = std::slice::from_raw_parts(thread_area as *const usize, 13);
+			let stack_end = pthread[12];
+			let stack_size = pthread[13];
+			let stack = AddressRange { start: stack_end - stack_size, size: stack_size };
+			env.memory_block.lock().mprotect(stack.align_expand(), Protection::RWStack)?;
+		}
+
+		let tid = self.next_tid;
+		let mut context = Box::new(Context::new(self.next_tid, &env.context_call_info, guest_rsp));
+		context.thread_area = thread_area;
+		context.clear_child_tid = child_tid;
+
+		TODO
+		unsafe {
+			*parent_tid = tid;
+		}
+		self.next_tid += 1;
+		Ok(tid)
+	}
+}
+
+
 
 
 const HOST_ABORTED: UnparkToken = UnparkToken(1);

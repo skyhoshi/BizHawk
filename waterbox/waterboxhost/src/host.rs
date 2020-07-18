@@ -10,15 +10,15 @@ use context::{CALLBACK_SLOTS, Context, ExternalCallback, thunks::ThunkManager, C
 use parking_lot::{RwLock, Mutex, RwLockWriteGuard};
 
 pub struct Environment {
-	fs: Mutex<FileSystem>,
-	program_break: Mutex<usize>,
-	memory_block: Mutex<Box<MemoryBlock>>,
-	layout: WbxSysLayout,
-	context_call_info: ContextCallInfo,
+	pub fs: Mutex<FileSystem>,
+	pub program_break: Mutex<usize>,
+	pub memory_block: Mutex<Box<MemoryBlock>>,
+	pub layout: WbxSysLayout,
+	pub context_call_info: ContextCallInfo,
 	/// See comments on MemoryBlock::mirror_displacement
-	mirror_displacement: usize,
+	pub mirror_displacement: usize,
 	/// Threads can copy this to get their own handle to the environment
-	cloneable_env_ref: *const Arc<RwLock<Environment>>,
+	pub cloneable_env_ref: *const Arc<RwLock<Environment>>,
 }
 
 pub struct WaterboxHost {

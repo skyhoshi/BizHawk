@@ -654,6 +654,7 @@ lookup! { lookup_syscall: SyscallNumber {
 	NR_FSPICK = 433;
 	NR_PIDFD_OPEN = 434;
 	NR_CLONE3 = 435;
+	NR_WBX_CLONE = 2000;
 }}
 
 pub const MAP_FAILED: usize = 0xffffffffffffffff;
