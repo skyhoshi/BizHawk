@@ -1,4 +1,6 @@
-﻿using System;
+﻿#nullable disable
+
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -15,9 +17,15 @@ namespace BizHawk.Common
 	public static class BinaryQuickSerializer
 	{
 		private static MethodInfo FromExpression(Expression e)
-			=> e is MethodCallExpression caller
-				? caller.Method
-				: throw new ArgumentException("Expression must be a method call");
+		{
+			var caller = e as MethodCallExpression;
+			if (caller == null)
+			{
+				throw new ArgumentException("Expression must be a method call");
+			}
+
+			return caller.Method;
+		}
 
 		private static MethodInfo Method<T>(Expression<Action<T>> f)
 		{
@@ -87,13 +95,6 @@ namespace BizHawk.Common
 			public Type Type;
 			public Reader Read;
 			public Writer Write;
-
-			public SerializationFactory(Type type, Reader read, Writer write)
-			{
-				Type = type;
-				Read = read;
-				Write = write;
-			}
 		}
 
 		private static SerializationFactory CreateFactory(Type t)
@@ -152,10 +153,12 @@ namespace BizHawk.Common
 				il.Emit(OpCodes.Ret);
 			}
 
-			return new SerializationFactory(
-				t,
-				(Reader) rmeth.CreateDelegate(typeof(Reader)),
-				(Writer) wmeth.CreateDelegate(typeof(Writer)));
+			return new SerializationFactory
+			{
+				Type = t,
+				Read = (Reader)rmeth.CreateDelegate(typeof(Reader)),
+				Write = (Writer)wmeth.CreateDelegate(typeof(Writer))
+			};
 		}
 
 		private static readonly IDictionary<Type, SerializationFactory> Serializers =

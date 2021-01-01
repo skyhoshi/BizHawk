@@ -1,4 +1,5 @@
-using System;
+#nullable disable
+
 using System.Diagnostics;
 
 namespace BizHawk.Common
@@ -81,9 +82,9 @@ namespace BizHawk.Common
 			return _val.GetHashCode();
 		}
 
-		public override bool Equals(object? obj)
+		public override bool Equals(object obj)
 		{
-			return this == (Bit) (obj ?? throw new NullReferenceException()); // this is probably wrong
+			return this == (Bit)obj;  // this is probably wrong
 		}
 	}
 }

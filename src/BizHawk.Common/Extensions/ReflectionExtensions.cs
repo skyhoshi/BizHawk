@@ -1,4 +1,6 @@
-﻿using System;
+﻿#nullable disable
+
+using System;
 using System.Linq;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -50,8 +52,16 @@ namespace BizHawk.Common.ReflectionExtensions
 		/// </summary>
 		public static string DisplayName(this Type type)
 		{
-			var attr = type.GetCustomAttributes(typeof(DisplayNameAttribute), false).FirstOrDefault();
-			return attr is DisplayNameAttribute displayName ? displayName.DisplayName : type.Name;
+			var displayName = (DisplayNameAttribute)type
+				.GetCustomAttributes(typeof(DisplayNameAttribute), false)
+				.FirstOrDefault();
+
+			if (displayName != null)
+			{
+				return displayName.DisplayName;
+			}
+
+			return type.Name;
 		}
 
 		/// <summary>
@@ -60,11 +70,15 @@ namespace BizHawk.Common.ReflectionExtensions
 		/// <param name="description">The description attribute value</param>
 		/// <typeparam name="T">The type of the enum</typeparam>
 		/// <returns>An enum value with the given description attribute, if no suitable description is found then a default value of the enum is returned</returns>
+		/// <exception cref="InvalidOperationException"><typeparamref name="T"/> does not inherit <see cref="Enum"/></exception>
 		/// <remarks>implementation from https://stackoverflow.com/a/4367868/7467292</remarks>
 		public static T GetEnumFromDescription<T>(this string description)
-			where T : Enum
 		{
 			var type = typeof(T);
+			if (!type.IsEnum)
+			{
+				throw new InvalidOperationException();
+			}
 
 			foreach (var field in type.GetFields())
 			{
@@ -85,8 +99,7 @@ namespace BizHawk.Common.ReflectionExtensions
 				}
 			}
 
-			var def = default(T); // does anyone know why Roslyn thinks this can evaluate to null? --yoshi
-			return def ?? throw new NullReferenceException();
+			return default(T);
 		}
 
 		/// <summary>
